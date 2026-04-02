@@ -171,6 +171,14 @@ ensure_python() {
   apt-get install -y python3 python3-pip python3-venv
 }
 
+read_repo_system_packages() {
+  local file="${SRC_DIR}/deploy/system-packages.txt"
+  if [[ -f "$file" ]]; then
+    grep -vE '^(\s*#|\s*$)' "$file" | tr '
+' ' '
+  fi
+}
+
 install_repo_system_packages() {
   local pkgs=()
 
@@ -505,6 +513,54 @@ ensure_venv() {
     rm -rf "$venv_path"
   fi
   [[ -d "$venv_path" ]] || python3 -m venv "$venv_path"
+}
+read_repo_system_packages() {
+  local file="${SRC_DIR}/deploy/system-packages.txt"
+  if [[ -f "$file" ]]; then
+    grep -vE '^(\s*#|\s*$)' "$file" | tr '
+' ' '
+  fi
+}
+install_repo_system_packages() {
+  local pkgs=()
+  if [[ -f "${SRC_DIR}/backend/requirements.txt" || -f "${SRC_DIR}/requirements.txt" || -f "${SRC_DIR}/pyproject.toml" ]]; then
+    pkgs+=(python3 python3-pip python3-venv)
+  fi
+  if [[ -f "${SRC_DIR}/package.json" || -f "${SRC_DIR}/backend/package.json" || -f "${SRC_DIR}/pnpm-lock.yaml" || -f "${SRC_DIR}/yarn.lock" ]]; then
+    command -v node >/dev/null 2>&1 || { curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs; }
+  fi
+  if grep -Rqi "mysqlclient" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(build-essential pkg-config default-libmysqlclient-dev)
+  fi
+  if grep -Rqi "Pillow" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(libjpeg-dev zlib1g-dev)
+  fi
+  if grep -Rqi "pytesseract" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(tesseract-ocr)
+  fi
+  if grep -Rqi "SpeechRecognition" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(flac)
+  fi
+  if [[ -f "${SRC_DIR}/go.mod" ]]; then
+    pkgs+=(golang-go)
+  fi
+  if [[ -f "${SRC_DIR}/Cargo.toml" ]]; then
+    pkgs+=(build-essential pkg-config libssl-dev)
+  fi
+  local repo_pkgs
+  repo_pkgs=$(read_repo_system_packages)
+  if [[ -n "$repo_pkgs" ]]; then
+    pkgs+=( $repo_pkgs )
+  fi
+  if [[ ${#pkgs[@]} -gt 0 ]]; then
+    local unique_pkgs
+    unique_pkgs=$(printf '%s
+' "${pkgs[@]}" | awk 'NF && !seen[$0]++')
+    log "Installing repo-required system packages"
+    apt-get install -y ${unique_pkgs}
+  else
+    log "No additional repo-required system packages detected"
+  fi
 }
 
 mkdir -p "${APP_DIR}" "${STATE_DIR}"
