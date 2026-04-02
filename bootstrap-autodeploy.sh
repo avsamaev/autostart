@@ -163,6 +163,7 @@ apt_install() {
 
 install_minimal_base() {
   log "Installing minimal bootstrap packages"
+  wait_for_apt_lock 60 || true
   apt_install update
   apt_install install -y ca-certificates curl git openssh-client jq rsync
 }
@@ -170,6 +171,7 @@ install_minimal_base() {
 ensure_node() {
   if ! command_exists node; then
     log "Installing Node.js 22 because the repo requires Node"
+    wait_for_apt_lock 60 || true
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt_install install -y nodejs
   fi
@@ -225,6 +227,7 @@ install_repo_system_packages() {
   if [[ ${#pkgs[@]} -gt 0 ]]; then
     local unique_pkgs
     unique_pkgs=$(printf '%s\n' "${pkgs[@]}" | awk 'NF && !seen[$0]++')
+    wait_for_apt_lock 60 || true
     log "Installing repo-required system packages"
     apt_install install -y ${unique_pkgs}
   else
