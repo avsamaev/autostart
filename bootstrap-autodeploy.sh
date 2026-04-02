@@ -28,6 +28,20 @@ REPO_DEPLOY_HOOK="${REPO_DEPLOY_HOOK:-deploy.sh}"
 # Helpers
 ############################
 
+C_RESET=""
+C_GREEN=""
+C_RED=""
+C_YELLOW=""
+C_BLUE=""
+
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_GREEN=$'\033[32m'
+  C_RED=$'\033[31m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+fi
+
 log() {
   echo -e "\n[+] $*\n"
 }
@@ -64,7 +78,7 @@ prompt_if_empty() {
 countdown() {
   local seconds="$1"
   while [[ "$seconds" -gt 0 ]]; do
-    printf '\r${C_YELLOW}[!] Retrying in %02d seconds...${C_RESET}' "$seconds"
+    printf '\r%b[!] Retrying in %02d seconds...%b' "$C_YELLOW" "$seconds" "$C_RESET"
     sleep 1
     seconds=$((seconds - 1))
   done
@@ -114,7 +128,7 @@ collect_config() {
   recompute_paths
 
   echo
-  echo -e "${C_BLUE}Configuration summary:${C_RESET}"
+  printf "%bConfiguration summary:%b\n" "$C_BLUE" "$C_RESET"
   echo "  APP_NAME        = $APP_NAME"
   echo "  APP_USER        = $APP_USER"
   echo "  REPO_SSH_URL    = $REPO_SSH_URL"
