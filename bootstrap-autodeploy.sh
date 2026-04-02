@@ -61,6 +61,32 @@ prompt_if_empty() {
   fi
 }
 
+countdown() {
+  local seconds="$1"
+  while [[ "$seconds" -gt 0 ]]; do
+    printf '\r[+] Retrying in %02d seconds...' "$seconds"
+    sleep 1
+    seconds=$((seconds - 1))
+  done
+  printf '\r%40s\r' ''
+}
+
+normalize_repo_url() {
+  if [[ "$REPO_SSH_URL" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then
+    local owner="${BASH_REMATCH[1]}"
+    local repo="${BASH_REMATCH[2]}"
+    warn "HTTPS repository URL detected. Deploy keys work with SSH URLs."
+    REPO_SSH_URL="git@github.com:${owner}/${repo}.git"
+    log "Converted repository URL to SSH: ${REPO_SSH_URL}"
+  fi
+}
+
+verify_repo_url() {
+  if [[ ! "$REPO_SSH_URL" =~ ^git@github.com:.+/.+\.git$ ]]; then
+    fail "Repository URL must be an SSH URL like git@github.com:owner/repo.git"
+  fi
+}
+
 recompute_paths() {
   APP_DIR="/opt/${APP_NAME}"
   SRC_DIR="${APP_DIR}/repo"
@@ -79,6 +105,8 @@ collect_config() {
   [[ -z "$APP_USER" ]] && APP_USER="deploy"
   APP_GROUP="$APP_USER"
   prompt_if_empty REPO_SSH_URL "Git SSH URL (example git@github.com:user/repo.git): "
+  normalize_repo_url
+  verify_repo_url
   prompt_if_empty REPO_BRANCH "Git branch [main]: "
   [[ -z "$REPO_BRANCH" ]] && REPO_BRANCH="main"
   prompt_if_empty REPO_DEPLOY_HOOK "Deploy hook inside repo [deploy.sh]: "
@@ -185,6 +213,28 @@ If clone fails, fix the deploy key on GitHub and run this again.
 EOF
 
 read -r -p "Press Enter after the deploy key has been added to the repository..." _
+
+for attempt in 1 2; do
+  if sudo -u "${APP_USER}" ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${KNOWN_HOSTS_PATH}" -i "${SSH_KEY_PATH}" -T git@github.com >/tmp/${APP_NAME}-ssh-check.log 2>&1; then
+    log "SSH deploy key check passed"
+    break
+  fi
+
+  if grep -qi "successfully authenticated\|Hi .*You've successfully authenticated" /tmp/${APP_NAME}-ssh-check.log 2>/dev/null; then
+    log "SSH deploy key check passed"
+    break
+  fi
+
+  warn "SSH deploy key is not ready yet for ${REPO_SSH_URL}."
+  cat /tmp/${APP_NAME}-ssh-check.log || true
+
+  if [[ "$attempt" -eq 1 ]]; then
+    warn "Waiting 60 seconds before retrying GitHub SSH access..."
+    countdown 60
+  else
+    fail "Deploy key still not accepted by GitHub after retry. Check that the deploy key was added to the correct repository and use the SSH repo URL."
+  fi
+done
 
 cat > "${APP_DIR}/deploy.env" <<EOF
 APP_NAME="${APP_NAME}"

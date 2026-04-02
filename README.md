@@ -56,6 +56,9 @@ The script now asks interactively for:
 
 It then prints the generated deploy public key and pauses so you can add it to the repository before clone starts.
 
+If you accidentally paste an HTTPS GitHub URL, the script converts it to SSH automatically.
+Before cloning, it also verifies GitHub SSH access with the generated deploy key. If GitHub has not accepted the key yet, the script waits 60 seconds and retries with a visible countdown.
+
 ### 2. Add the generated public key to your Git repository
 
 GitHub path:
