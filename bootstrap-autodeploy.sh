@@ -222,6 +222,27 @@ install_repo_systemd_unit() {
     -e "s|Group=content|Group=${APP_GROUP}|g" \
     "$selected_unit" > "/etc/systemd/system/${APP_NAME}.service"
 
+  if [[ -f "${SRC_DIR}/deploy/runtime.env" ]]; then
+    log "Installing repo-provided runtime env file"
+    install -d -m 755 /etc/${APP_NAME}
+    cp "${SRC_DIR}/deploy/runtime.env" "/etc/${APP_NAME}/runtime.env"
+    if ! grep -q '^EnvironmentFile=/etc/' "/etc/systemd/system/${APP_NAME}.service"; then
+      python3 - <<PY2
+from pathlib import Path
+p = Path('/etc/systemd/system/${APP_NAME}.service')
+text = p.read_text()
+needle = '[Service]
+'
+replace = '[Service]
+EnvironmentFile=-/etc/${APP_NAME}/runtime.env
+'
+if needle in text and 'EnvironmentFile=-/etc/${APP_NAME}/runtime.env' not in text:
+    text = text.replace(needle, replace, 1)
+p.write_text(text)
+PY2
+    fi
+  fi
+
   systemctl daemon-reload
   systemctl enable "${APP_NAME}.service"
   systemctl restart "${APP_NAME}.service"
