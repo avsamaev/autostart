@@ -820,11 +820,7 @@ elif [[ -f "./${REPO_DEPLOY_HOOK}" ]]; then
 else
   log "No deploy hook found"
 fi
-if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q "^${REPO_SERVICE_NAME}"; then
-  log "Restarting ${REPO_SERVICE_NAME} after successful deploy"
-  systemctl restart "${REPO_SERVICE_NAME}" || systemctl start "${REPO_SERVICE_NAME}"
-  systemctl --no-pager --full status "${REPO_SERVICE_NAME}" || true
-fi
+
 EOM
 
 sed -i "s|/opt/myapp|${APP_DIR}|g" "${BIN_DIR}/deploy-update.sh"
