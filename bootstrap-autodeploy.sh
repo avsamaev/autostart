@@ -411,6 +411,40 @@ source /opt/myapp/deploy.env
 export HOME="/home/${APP_USER}"
 export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}"
 mkdir -p "${APP_DIR}" "${STATE_DIR}"
+clear_stale_git_lock() {
+  local repo_dir="$1"
+  local lock_file="${repo_dir}/.git/index.lock"
+  if [[ ! -f "$lock_file" ]]; then
+    return 0
+  fi
+  if command -v lsof >/dev/null 2>&1 && lsof "$lock_file" >/dev/null 2>&1; then
+    return 1
+  fi
+  rm -f "$lock_file"
+  return 0
+}
+git_sync_repo() {
+  local attempt
+  for attempt in 1 2; do
+    if [[ ! -d "${SRC_DIR}/.git" ]]; then
+      echo "[+] Cloning repository"
+      git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}" && return 0
+    else
+      clear_stale_git_lock "${SRC_DIR}" || true
+      echo "[+] Updating repository"
+      if git -C "${SRC_DIR}" fetch origin         && git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"         && git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"; then
+        return 0
+      fi
+    fi
+    if [[ -f "${SRC_DIR}/.git/index.lock" && "$attempt" -eq 1 ]]; then
+      sleep 60
+      clear_stale_git_lock "${SRC_DIR}" || true
+      continue
+    fi
+    return 1
+  done
+  return 1
+}
 git_sync_repo
 EOM
 sed -i "s|/opt/myapp|${APP_DIR}|g" "${BIN_DIR}/deploy-update.sh"
@@ -434,6 +468,40 @@ source /opt/myapp/deploy.env
 export HOME="/home/${APP_USER}"
 export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}"
 mkdir -p "${APP_DIR}" "${STATE_DIR}"
+clear_stale_git_lock() {
+  local repo_dir="$1"
+  local lock_file="${repo_dir}/.git/index.lock"
+  if [[ ! -f "$lock_file" ]]; then
+    return 0
+  fi
+  if command -v lsof >/dev/null 2>&1 && lsof "$lock_file" >/dev/null 2>&1; then
+    return 1
+  fi
+  rm -f "$lock_file"
+  return 0
+}
+git_sync_repo() {
+  local attempt
+  for attempt in 1 2; do
+    if [[ ! -d "${SRC_DIR}/.git" ]]; then
+      echo "[+] Cloning repository"
+      git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}" && return 0
+    else
+      clear_stale_git_lock "${SRC_DIR}" || true
+      echo "[+] Updating repository"
+      if git -C "${SRC_DIR}" fetch origin         && git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"         && git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"; then
+        return 0
+      fi
+    fi
+    if [[ -f "${SRC_DIR}/.git/index.lock" && "$attempt" -eq 1 ]]; then
+      sleep 60
+      clear_stale_git_lock "${SRC_DIR}" || true
+      continue
+    fi
+    return 1
+  done
+  return 1
+}
 git_sync_repo
 cd "${SRC_DIR}"
 if [[ -f "requirements.txt" ]]; then
