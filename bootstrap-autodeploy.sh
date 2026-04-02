@@ -121,6 +121,31 @@ recompute_paths() {
   KNOWN_HOSTS_PATH="/home/${APP_USER}/.ssh/known_hosts"
 }
 
+install_repo_systemd_unit() {
+  local default_unit_path="${SRC_DIR}/deploy/systemd/${APP_NAME}.service"
+  local fallback_unit_path="${SRC_DIR}/deploy/systemd/content-orchestrator.service"
+  local selected_unit=""
+
+  if [[ -f "$default_unit_path" ]]; then
+    selected_unit="$default_unit_path"
+  elif [[ -f "$fallback_unit_path" ]]; then
+    selected_unit="$fallback_unit_path"
+  fi
+
+  if [[ -z "$selected_unit" ]]; then
+    warn "No repo-provided systemd service file found; skipping unit installation"
+    return 0
+  fi
+
+  log "Installing systemd unit from ${selected_unit}"
+  sed     -e "s|/home/content/orchestrator|${SRC_DIR}|g"     -e "s|/opt/content-orchestrator/repo|${SRC_DIR}|g"     -e "s|User=content|User=${APP_USER}|g"     -e "s|Group=content|Group=${APP_GROUP}|g"     "$selected_unit" > "/etc/systemd/system/${APP_NAME}.service"
+
+  systemctl daemon-reload
+  systemctl enable "${APP_NAME}.service"
+  systemctl restart "${APP_NAME}.service"
+  systemctl --no-pager --full status "${APP_NAME}.service" || true
+}
+
 collect_config() {
   echo
   echo "=== Autodeploy bootstrap configuration ==="
@@ -401,6 +426,8 @@ if [[ "${DEPLOY_RC}" -ne 0 ]]; then
   warn "Most likely the deploy key is not added to the repository yet."
   warn "After adding the key, run:"
   echo "sudo -u ${APP_USER} bash ${BIN_DIR}/deploy-update.sh"
+else
+  install_repo_systemd_unit
 fi
 
 log "Writing systemd units"
