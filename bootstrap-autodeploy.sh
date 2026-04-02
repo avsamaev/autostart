@@ -360,13 +360,15 @@ fi
 mkdir -p "${APP_DIR}" "${BIN_DIR}" "${STATE_DIR}"
 chown -R "${APP_USER}:${APP_GROUP}" "${APP_DIR}" "${BIN_DIR}" "${STATE_DIR}" || true
 
-log "Preparing SSH deploy key"
 install -d -m 700 -o "${APP_USER}" -g "${APP_GROUP}" "/home/${APP_USER}/.ssh"
 
-if [[ ! -f "${SSH_KEY_PATH}" ]]; then
-  sudo -u "${APP_USER}" ssh-keygen -t ed25519 -C "${APP_NAME}-deploy@$(hostname)" -N "" -f "${SSH_KEY_PATH}"
+deploy_key_exists=0
+if [[ -f "${SSH_KEY_PATH}" && -f "${SSH_KEY_PATH}.pub" ]]; then
+  deploy_key_exists=1
+  log "Using existing SSH deploy key: ${SSH_KEY_PATH}"
 else
-  warn "SSH key already exists: ${SSH_KEY_PATH}"
+  log "Preparing SSH deploy key"
+  sudo -u "${APP_USER}" ssh-keygen -t ed25519 -C "${APP_NAME}-deploy@$(hostname)" -N "" -f "${SSH_KEY_PATH}"
 fi
 
 touch "${KNOWN_HOSTS_PATH}"
@@ -376,9 +378,9 @@ chmod 600 "${KNOWN_HOSTS_PATH}"
 log "Adding github.com to known_hosts"
 sudo -u "${APP_USER}" ssh-keyscan -H github.com >> "${KNOWN_HOSTS_PATH}" 2>/dev/null || true
 
-PUBKEY="$(cat "${SSH_KEY_PATH}.pub")"
-
-cat <<EOM
+if [[ "$deploy_key_exists" -eq 0 ]]; then
+  PUBKEY="$(cat "${SSH_KEY_PATH}.pub")"
+  cat <<EOM
 
 ============================================================
 DEPLOY PUBLIC KEY (add this to your Git repo as deploy key)
@@ -400,7 +402,8 @@ If clone fails, fix the deploy key on GitHub and run this again.
 
 EOM
 
-read -r -p "Press Enter after the deploy key has been added to the repository..." _
+  read -r -p "Press Enter after the deploy key has been added to the repository..." _
+fi
 
 for attempt in 1 2; do
   if sudo -u "${APP_USER}" ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${KNOWN_HOSTS_PATH}" -i "${SSH_KEY_PATH}" -T git@github.com >/tmp/${APP_NAME}-ssh-check.log 2>&1; then
@@ -666,7 +669,10 @@ warn() { printf "
 %b[!] %s%b
 
 " "$C_YELLOW" "$*" "$C_RESET"; }
-countdown() { local s="$1"; while [[ "$s" -gt 0 ]]; do printf '%b[!] Retrying in %02d seconds...%b' "$C_YELLOW" "$s" "$C_RESET"; sleep 1; s=$((s-1)); done; printf '%40s' ''; }
+countdown() { local s="$1"; while [[ "$s" -gt 0 ]]; do printf '
+%b[!] Retrying in %02d seconds...%b' "$C_YELLOW" "$s" "$C_RESET"; sleep 1; s=$((s-1)); done; printf '
+%40s
+' ''; }
 clear_stale_git_lock() {
   local lock_file="${SRC_DIR}/.git/index.lock"
   [[ -f "$lock_file" ]] || return 0
