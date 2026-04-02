@@ -29,6 +29,23 @@ if [[ -t 1 ]]; then
   C_BLUE=$'\033[34m'
 fi
 
+BOOTSTRAP_VERSION="2026-04-02.1"
+
+banner() {
+  printf "
+%b============================================================%b
+" "$C_BLUE" "$C_RESET"
+  printf "%bAutostart bootstrap version:%b %s
+" "$C_GREEN" "$C_RESET" "$BOOTSTRAP_VERSION"
+  printf "%bRepository:%b %s
+" "$C_GREEN" "$C_RESET" "${REPO_SSH_URL:-unset}"
+  printf "%bBranch:%b %s
+" "$C_GREEN" "$C_RESET" "${REPO_BRANCH:-unset}"
+  printf "%b============================================================%b
+
+" "$C_BLUE" "$C_RESET"
+}
+
 log() {
   printf "\n%b[+] %s%b\n\n" "$C_GREEN" "$*" "$C_RESET"
 }
@@ -311,6 +328,7 @@ PY2
 
 need_root
 collect_config
+banner
 export DEBIAN_FRONTEND=noninteractive
 install_minimal_base
 
@@ -434,7 +452,10 @@ fail() { printf "
 %b[x] %s%b
 
 " "$C_RED" "$*" "$C_RESET" >&2; exit 1; }
-countdown() { local s="$1"; while [[ "$s" -gt 0 ]]; do printf '%b[!] Retrying in %02d seconds...%b' "$C_YELLOW" "$s" "$C_RESET"; sleep 1; s=$((s-1)); done; printf '%40s' ''; }
+countdown() { local s="$1"; while [[ "$s" -gt 0 ]]; do printf '
+%b[!] Retrying in %02d seconds...%b' "$C_YELLOW" "$s" "$C_RESET"; sleep 1; s=$((s-1)); done; printf '
+%40s
+' ''; }
 clear_stale_git_lock() {
   local lock_file="${SRC_DIR}/.git/index.lock"
   [[ -f "$lock_file" ]] || return 0
@@ -477,6 +498,14 @@ ensure_venv() {
 mkdir -p "${APP_DIR}" "${STATE_DIR}"
 git_sync_repo
 cd "${SRC_DIR}"
+printf "
+%b[+] Deployed repo commit:%b %s
+
+" "$C_GREEN" "$C_RESET" "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+printf "
+%b[+] Deployed repo commit:%b %s
+
+" "$C_GREEN" "$C_RESET" "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 if [[ -f "requirements.txt" ]]; then
   ensure_venv "${APP_DIR}/venv"
