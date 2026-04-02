@@ -410,49 +410,110 @@ set -Eeuo pipefail
 source /opt/myapp/deploy.env
 export HOME="/home/${APP_USER}"
 export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}"
-mkdir -p "${APP_DIR}" "${STATE_DIR}"
+
+C_RESET=""
+C_GREEN=""
+C_RED=""
+C_YELLOW=""
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_GREEN=$'\033[32m'
+  C_RED=$'\033[31m'
+  C_YELLOW=$'\033[33m'
+fi
+
+log() { printf "
+%b[+] %s%b
+
+" "$C_GREEN" "$*" "$C_RESET"; }
+warn() { printf "
+%b[!] %s%b
+
+" "$C_YELLOW" "$*" "$C_RESET"; }
+fail() { printf "
+%b[x] %s%b
+
+" "$C_RED" "$*" "$C_RESET" >&2; exit 1; }
+countdown() { local s="$1"; while [[ "$s" -gt 0 ]]; do printf '%b[!] Retrying in %02d seconds...%b' "$C_YELLOW" "$s" "$C_RESET"; sleep 1; s=$((s-1)); done; printf '%40s' ''; }
 clear_stale_git_lock() {
-  local repo_dir="$1"
-  local lock_file="${repo_dir}/.git/index.lock"
-  if [[ ! -f "$lock_file" ]]; then
-    return 0
-  fi
+  local lock_file="${SRC_DIR}/.git/index.lock"
+  [[ -f "$lock_file" ]] || return 0
   if command -v lsof >/dev/null 2>&1 && lsof "$lock_file" >/dev/null 2>&1; then
     return 1
   fi
   rm -f "$lock_file"
-  return 0
 }
 git_sync_repo() {
   local attempt
   for attempt in 1 2 3; do
     if [[ ! -d "${SRC_DIR}/.git" ]]; then
-      echo "[+] Cloning repository"
-      if git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}"; then
-        return 0
-      fi
+      log "Cloning repository"
+      git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}" && return 0
     else
-      clear_stale_git_lock "${SRC_DIR}" || true
-      echo "[+] Updating repository"
-      if git -C "${SRC_DIR}" fetch origin         && git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"         && git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"; then
+      clear_stale_git_lock || true
+      log "Updating repository"
+      if git -C "${SRC_DIR}" fetch origin && git -C "${SRC_DIR}" checkout "${REPO_BRANCH}" && git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"; then
         return 0
       fi
     fi
-
-    if [[ -f "${SRC_DIR}/.git/index.lock" ]]; then
-      if [[ "$attempt" -lt 3 ]]; then
-        echo "[!] Git index.lock detected; retrying in 60 seconds"
-        sleep 60
-        clear_stale_git_lock "${SRC_DIR}" || true
-        continue
-      fi
+    if [[ -f "${SRC_DIR}/.git/index.lock" && "$attempt" -lt 3 ]]; then
+      warn "Git index.lock detected; retrying in 60 seconds"
+      countdown 60
+      clear_stale_git_lock || true
+      continue
     fi
-
     return 1
   done
-  return 1
 }
+ensure_venv() {
+  local venv_path="$1"
+  if [[ -d "$venv_path" ]] && [[ ! -x "$venv_path/bin/python" || ! -x "$venv_path/bin/pip" ]]; then
+    warn "Broken virtualenv detected at ${venv_path}; recreating it"
+    rm -rf "$venv_path"
+  fi
+  [[ -d "$venv_path" ]] || python3 -m venv "$venv_path"
+}
+
+mkdir -p "${APP_DIR}" "${STATE_DIR}"
 git_sync_repo
+cd "${SRC_DIR}"
+
+if [[ -f "requirements.txt" ]]; then
+  ensure_venv "${APP_DIR}/venv"
+  "${APP_DIR}/venv/bin/python" -m pip install --upgrade pip setuptools wheel
+  "${APP_DIR}/venv/bin/python" -m pip install -r requirements.txt
+fi
+if [[ -f "backend/requirements.txt" ]]; then
+  ensure_venv "${SRC_DIR}/backend/.venv"
+  "${SRC_DIR}/backend/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
+  "${SRC_DIR}/backend/.venv/bin/python" -m pip install -r backend/requirements.txt
+fi
+if [[ -f "pyproject.toml" ]]; then
+  ensure_venv "${APP_DIR}/venv"
+  "${APP_DIR}/venv/bin/python" -m pip install --upgrade pip setuptools wheel
+  "${APP_DIR}/venv/bin/python" -m pip install .
+fi
+if [[ -f "package-lock.json" ]]; then
+  npm ci
+elif [[ -f "package.json" ]]; then
+  npm install
+fi
+if [[ -f "pnpm-lock.yaml" ]]; then
+  npm install -g pnpm
+  pnpm install --frozen-lockfile || pnpm install
+fi
+if [[ -f "yarn.lock" ]]; then
+  npm install -g yarn
+  yarn install --frozen-lockfile || yarn install
+fi
+if [[ -x "./${REPO_DEPLOY_HOOK}" ]]; then
+  "./${REPO_DEPLOY_HOOK}"
+elif [[ -f "./${REPO_DEPLOY_HOOK}" ]]; then
+  bash "./${REPO_DEPLOY_HOOK}"
+else
+  log "No deploy hook found"
+fi
+EOM
 EOM
 sed -i "s|/opt/myapp|${APP_DIR}|g" "${BIN_DIR}/deploy-update.sh"
 chmod +x "${BIN_DIR}/deploy-update.sh"
