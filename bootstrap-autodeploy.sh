@@ -425,10 +425,12 @@ clear_stale_git_lock() {
 }
 git_sync_repo() {
   local attempt
-  for attempt in 1 2; do
+  for attempt in 1 2 3; do
     if [[ ! -d "${SRC_DIR}/.git" ]]; then
       echo "[+] Cloning repository"
-      git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}" && return 0
+      if git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}"; then
+        return 0
+      fi
     else
       clear_stale_git_lock "${SRC_DIR}" || true
       echo "[+] Updating repository"
@@ -436,11 +438,16 @@ git_sync_repo() {
         return 0
       fi
     fi
-    if [[ -f "${SRC_DIR}/.git/index.lock" && "$attempt" -eq 1 ]]; then
-      sleep 60
-      clear_stale_git_lock "${SRC_DIR}" || true
-      continue
+
+    if [[ -f "${SRC_DIR}/.git/index.lock" ]]; then
+      if [[ "$attempt" -lt 3 ]]; then
+        echo "[!] Git index.lock detected; retrying in 60 seconds"
+        sleep 60
+        clear_stale_git_lock "${SRC_DIR}" || true
+        continue
+      fi
     fi
+
     return 1
   done
   return 1
