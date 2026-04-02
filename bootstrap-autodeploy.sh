@@ -7,6 +7,7 @@ APP_GROUP="${APP_GROUP:-deploy}"
 REPO_SSH_URL="${REPO_SSH_URL:-}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 REPO_DEPLOY_HOOK="${REPO_DEPLOY_HOOK:-deploy.sh}"
+REPO_SERVICE_NAME="${REPO_SERVICE_NAME:-${APP_NAME}.service}"
 
 APP_DIR="/opt/${APP_NAME}"
 SRC_DIR="${APP_DIR}/repo"
@@ -273,6 +274,18 @@ git_sync_repo() {
   done
 
   return 1
+}
+
+restart_repo_service() {
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files | grep -q "^${REPO_SERVICE_NAME}"; then
+      log "Restarting ${REPO_SERVICE_NAME}"
+      systemctl restart "${REPO_SERVICE_NAME}" || systemctl start "${REPO_SERVICE_NAME}"
+      systemctl --no-pager --full status "${REPO_SERVICE_NAME}" || true
+    else
+      warn "Service ${REPO_SERVICE_NAME} not installed yet; skipping restart"
+    fi
+  fi
 }
 
 install_repo_systemd_unit() {
@@ -542,6 +555,14 @@ elif [[ -f "./${REPO_DEPLOY_HOOK}" ]]; then
 else
   log "No deploy hook found"
 fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl list-unit-files | grep -q "^${REPO_SERVICE_NAME}"; then
+    log "Restarting ${REPO_SERVICE_NAME} after successful deploy"
+    systemctl restart "${REPO_SERVICE_NAME}" || systemctl start "${REPO_SERVICE_NAME}"
+    systemctl --no-pager --full status "${REPO_SERVICE_NAME}" || true
+  fi
+fi
 EOM
 chmod +x "${BIN_DIR}/deploy-update.sh"
 chown "${APP_USER}:${APP_GROUP}" "${BIN_DIR}/deploy-update.sh"
@@ -642,6 +663,7 @@ chown "${APP_USER}:${APP_GROUP}" "${BIN_DIR}/deploy-update.sh"
 log "Running full deploy"
 if sudo -u "${APP_USER}" bash "${BIN_DIR}/deploy-update.sh"; then
   install_repo_systemd_unit
+  restart_repo_service
 else
   fail "Full deploy failed"
 fi
