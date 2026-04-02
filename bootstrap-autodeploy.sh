@@ -211,6 +211,53 @@ ensure_working_venv() {
   fi
 }
 
+clear_stale_git_lock() {
+  local repo_dir="$1"
+  local lock_file="${repo_dir}/.git/index.lock"
+
+  if [[ ! -f "$lock_file" ]]; then
+    return 0
+  fi
+
+  warn "Git index.lock detected at ${lock_file}"
+
+  if command -v lsof >/dev/null 2>&1 && lsof "$lock_file" >/dev/null 2>&1; then
+    warn "Lock file is still held by a running process"
+    return 1
+  fi
+
+  warn "Removing stale git lock file"
+  rm -f "$lock_file"
+  return 0
+}
+
+git_sync_repo() {
+  local attempt
+  for attempt in 1 2; do
+    if [[ ! -d "${SRC_DIR}/.git" ]]; then
+      echo "[+] Cloning repository"
+      git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}" && return 0
+    else
+      clear_stale_git_lock "${SRC_DIR}" || true
+      echo "[+] Updating repository"
+      if git -C "${SRC_DIR}" fetch origin         && git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"         && git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"; then
+        return 0
+      fi
+    fi
+
+    if [[ -f "${SRC_DIR}/.git/index.lock" && "$attempt" -eq 1 ]]; then
+      warn "Git lock prevented update. Waiting 60 seconds before retrying..."
+      countdown 60
+      clear_stale_git_lock "${SRC_DIR}" || true
+      continue
+    fi
+
+    return 1
+  done
+
+  return 1
+}
+
 install_repo_systemd_unit() {
   local default_unit_path="${SRC_DIR}/deploy/systemd/${APP_NAME}.service"
   local fallback_unit_path="${SRC_DIR}/deploy/systemd/content-orchestrator.service"
@@ -364,15 +411,7 @@ source /opt/myapp/deploy.env
 export HOME="/home/${APP_USER}"
 export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}"
 mkdir -p "${APP_DIR}" "${STATE_DIR}"
-if [[ ! -d "${SRC_DIR}/.git" ]]; then
-  echo "[+] Cloning repository"
-  git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}"
-else
-  echo "[+] Updating repository"
-  git -C "${SRC_DIR}" fetch origin
-  git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"
-  git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"
-fi
+git_sync_repo
 EOM
 sed -i "s|/opt/myapp|${APP_DIR}|g" "${BIN_DIR}/deploy-update.sh"
 chmod +x "${BIN_DIR}/deploy-update.sh"
@@ -395,15 +434,7 @@ source /opt/myapp/deploy.env
 export HOME="/home/${APP_USER}"
 export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}"
 mkdir -p "${APP_DIR}" "${STATE_DIR}"
-if [[ ! -d "${SRC_DIR}/.git" ]]; then
-  echo "[+] Cloning repository"
-  git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}"
-else
-  echo "[+] Updating repository"
-  git -C "${SRC_DIR}" fetch origin
-  git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"
-  git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"
-fi
+git_sync_repo
 cd "${SRC_DIR}"
 if [[ -f "requirements.txt" ]]; then
   ensure_working_venv "${APP_DIR}/venv"
