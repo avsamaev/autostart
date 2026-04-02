@@ -153,22 +153,30 @@ collect_config() {
   echo
 }
 
+apt_install() {
+  if [[ ${EUID} -ne 0 ]]; then
+    sudo apt-get "$@"
+  else
+    apt-get "$@"
+  fi
+}
+
 install_minimal_base() {
   log "Installing minimal bootstrap packages"
-  apt-get update
-  apt-get install -y ca-certificates curl git openssh-client jq rsync
+  apt_install update
+  apt_install install -y ca-certificates curl git openssh-client jq rsync
 }
 
 ensure_node() {
   if ! command_exists node; then
     log "Installing Node.js 22 because the repo requires Node"
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    apt-get install -y nodejs
+    apt_install install -y nodejs
   fi
 }
 
 ensure_python() {
-  apt-get install -y python3 python3-pip python3-venv
+  apt_install install -y python3 python3-pip python3-venv
 }
 
 read_repo_system_packages() {
@@ -218,7 +226,7 @@ install_repo_system_packages() {
     local unique_pkgs
     unique_pkgs=$(printf '%s\n' "${pkgs[@]}" | awk 'NF && !seen[$0]++')
     log "Installing repo-required system packages"
-    apt-get install -y ${unique_pkgs}
+    apt_install install -y ${unique_pkgs}
   else
     log "No additional repo-required system packages detected"
   fi
@@ -560,7 +568,7 @@ install_repo_system_packages() {
     unique_pkgs=$(printf '%s
 ' "${pkgs[@]}" | awk 'NF && !seen[$0]++')
     log "Installing repo-required system packages"
-    apt-get install -y ${unique_pkgs}
+    apt_install install -y ${unique_pkgs}
   else
     log "No additional repo-required system packages detected"
   fi
@@ -754,7 +762,7 @@ install_repo_system_packages() {
     unique_pkgs=$(printf '%s
 ' "${pkgs[@]}" | awk 'NF && !seen[$0]++')
     log "Installing repo-required system packages"
-    apt-get install -y ${unique_pkgs}
+    apt_install install -y ${unique_pkgs}
   else
     log "No additional repo-required system packages detected"
   fi
