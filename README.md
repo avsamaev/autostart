@@ -48,9 +48,10 @@ REPO_SSH_URL="git@github.com:YOUR_USER/YOUR_REPO.git"
 REPO_BRANCH="main"
 ```
 
-### 2. Run on a clean Ubuntu 24 server
+### 2. Download and run on a clean Ubuntu 24 server
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/avsamaev/autostart/main/bootstrap-autodeploy.sh -o bootstrap-autodeploy.sh
 chmod +x bootstrap-autodeploy.sh
 sudo ./bootstrap-autodeploy.sh
 ```
