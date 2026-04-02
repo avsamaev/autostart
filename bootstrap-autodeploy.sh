@@ -64,7 +64,7 @@ prompt_if_empty() {
 countdown() {
   local seconds="$1"
   while [[ "$seconds" -gt 0 ]]; do
-    printf '\r[+] Retrying in %02d seconds...' "$seconds"
+    printf '\r${C_YELLOW}[!] Retrying in %02d seconds...${C_RESET}' "$seconds"
     sleep 1
     seconds=$((seconds - 1))
   done
@@ -114,7 +114,7 @@ collect_config() {
   recompute_paths
 
   echo
-  echo "Configuration summary:"
+  echo -e "${C_BLUE}Configuration summary:${C_RESET}"
   echo "  APP_NAME        = $APP_NAME"
   echo "  APP_USER        = $APP_USER"
   echo "  REPO_SSH_URL    = $REPO_SSH_URL"
