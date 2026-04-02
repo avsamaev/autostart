@@ -86,18 +86,29 @@ countdown() {
 }
 
 normalize_repo_url() {
-  if [[ "$REPO_SSH_URL" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then
+  local raw="$REPO_SSH_URL"
+  raw="${raw#ssh://}"
+  raw="${raw#git@github.com:}"
+  raw="${raw#https://github.com/}"
+  raw="${raw#http://github.com/}"
+  raw="${raw#github.com/}"
+  raw="${raw%/}"
+  raw="${raw%.git}"
+
+  if [[ "$raw" =~ ^([^/]+)/([^/]+)$ ]]; then
     local owner="${BASH_REMATCH[1]}"
     local repo="${BASH_REMATCH[2]}"
-    warn "HTTPS repository URL detected. Deploy keys work with SSH URLs."
+    if [[ "$REPO_SSH_URL" != "git@github.com:${owner}/${repo}.git" ]]; then
+      warn "Repository URL normalized to SSH format for deploy keys."
+    fi
     REPO_SSH_URL="git@github.com:${owner}/${repo}.git"
-    log "Converted repository URL to SSH: ${REPO_SSH_URL}"
+    log "Using repository SSH URL: ${REPO_SSH_URL}"
   fi
 }
 
 verify_repo_url() {
-  if [[ ! "$REPO_SSH_URL" =~ ^git@github.com:.+/.+\.git$ ]]; then
-    fail "Repository URL must be an SSH URL like git@github.com:owner/repo.git"
+  if [[ ! "$REPO_SSH_URL" =~ ^git@github.com:[^/]+/[^/]+\.git$ ]]; then
+    fail "Repository value must look like owner/repo, github.com/owner/repo, or git@github.com:owner/repo.git"
   fi
 }
 
