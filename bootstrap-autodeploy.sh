@@ -1,32 +1,19 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-############################
-# Config — defaults / env overrides
-############################
-
 APP_NAME="${APP_NAME:-myapp}"
 APP_USER="${APP_USER:-deploy}"
 APP_GROUP="${APP_GROUP:-deploy}"
-
 REPO_SSH_URL="${REPO_SSH_URL:-}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
+REPO_DEPLOY_HOOK="${REPO_DEPLOY_HOOK:-deploy.sh}"
 
 APP_DIR="/opt/${APP_NAME}"
 SRC_DIR="${APP_DIR}/repo"
 BIN_DIR="${APP_DIR}/bin"
 STATE_DIR="/var/lib/${APP_NAME}"
-
 SSH_KEY_PATH="/home/${APP_USER}/.ssh/${APP_NAME}_deploy_key"
 KNOWN_HOSTS_PATH="/home/${APP_USER}/.ssh/known_hosts"
-
-# Optional custom deploy hook inside repo
-# If present and executable, script will run it after dependency install.
-REPO_DEPLOY_HOOK="${REPO_DEPLOY_HOOK:-deploy.sh}"
-
-############################
-# Helpers
-############################
 
 C_RESET=""
 C_GREEN=""
@@ -43,15 +30,15 @@ if [[ -t 1 ]]; then
 fi
 
 log() {
-  echo -e "\n[+] $*\n"
+  printf "\n%b[+] %s%b\n\n" "$C_GREEN" "$*" "$C_RESET"
 }
 
 warn() {
-  echo -e "\n[!] $*\n"
+  printf "\n%b[!] %s%b\n\n" "$C_YELLOW" "$*" "$C_RESET"
 }
 
 fail() {
-  echo -e "\n[x] $*\n" >&2
+  printf "\n%b[x] %s%b\n\n" "$C_RED" "$*" "$C_RESET" >&2
   exit 1
 }
 
@@ -121,31 +108,6 @@ recompute_paths() {
   KNOWN_HOSTS_PATH="/home/${APP_USER}/.ssh/known_hosts"
 }
 
-install_repo_systemd_unit() {
-  local default_unit_path="${SRC_DIR}/deploy/systemd/${APP_NAME}.service"
-  local fallback_unit_path="${SRC_DIR}/deploy/systemd/content-orchestrator.service"
-  local selected_unit=""
-
-  if [[ -f "$default_unit_path" ]]; then
-    selected_unit="$default_unit_path"
-  elif [[ -f "$fallback_unit_path" ]]; then
-    selected_unit="$fallback_unit_path"
-  fi
-
-  if [[ -z "$selected_unit" ]]; then
-    warn "No repo-provided systemd service file found; skipping unit installation"
-    return 0
-  fi
-
-  log "Installing systemd unit from ${selected_unit}"
-  sed     -e "s|/home/content/orchestrator|${SRC_DIR}|g"     -e "s|/opt/content-orchestrator/repo|${SRC_DIR}|g"     -e "s|User=content|User=${APP_USER}|g"     -e "s|Group=content|Group=${APP_GROUP}|g"     "$selected_unit" > "/etc/systemd/system/${APP_NAME}.service"
-
-  systemctl daemon-reload
-  systemctl enable "${APP_NAME}.service"
-  systemctl restart "${APP_NAME}.service"
-  systemctl --no-pager --full status "${APP_NAME}.service" || true
-}
-
 collect_config() {
   echo
   echo "=== Autodeploy bootstrap configuration ==="
@@ -154,7 +116,7 @@ collect_config() {
   prompt_if_empty APP_USER "Deploy user [deploy]: "
   [[ -z "$APP_USER" ]] && APP_USER="deploy"
   APP_GROUP="$APP_USER"
-  prompt_if_empty REPO_SSH_URL "Git SSH URL (example git@github.com:user/repo.git): "
+  prompt_if_empty REPO_SSH_URL "Git repository (owner/repo or GitHub URL): "
   normalize_repo_url
   verify_repo_url
   prompt_if_empty REPO_BRANCH "Git branch [main]: "
@@ -173,42 +135,103 @@ collect_config() {
   echo
 }
 
-############################
-# Core setup
-############################
+install_minimal_base() {
+  log "Installing minimal bootstrap packages"
+  apt-get update
+  apt-get install -y ca-certificates curl git openssh-client jq rsync
+}
+
+ensure_node() {
+  if ! command_exists node; then
+    log "Installing Node.js 22 because the repo requires Node"
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
+  fi
+}
+
+ensure_python() {
+  apt-get install -y python3 python3-pip python3-venv
+}
+
+install_repo_system_packages() {
+  local pkgs=()
+
+  if [[ -f "${SRC_DIR}/backend/requirements.txt" || -f "${SRC_DIR}/requirements.txt" || -f "${SRC_DIR}/pyproject.toml" ]]; then
+    pkgs+=(python3 python3-pip python3-venv)
+  fi
+
+  if [[ -f "${SRC_DIR}/package.json" || -f "${SRC_DIR}/backend/package.json" || -f "${SRC_DIR}/pnpm-lock.yaml" || -f "${SRC_DIR}/yarn.lock" ]]; then
+    ensure_node
+  fi
+
+  if grep -Rqi "mysqlclient" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(build-essential pkg-config default-libmysqlclient-dev)
+  fi
+
+  if grep -Rqi "Pillow" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(libjpeg-dev zlib1g-dev)
+  fi
+
+  if grep -Rqi "pytesseract" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(tesseract-ocr)
+  fi
+
+  if grep -Rqi "SpeechRecognition" "${SRC_DIR}"/backend/requirements.txt "${SRC_DIR}"/requirements.txt 2>/dev/null; then
+    pkgs+=(flac)
+  fi
+
+  if [[ -f "${SRC_DIR}/go.mod" ]]; then
+    pkgs+=(golang-go)
+  fi
+
+  if [[ -f "${SRC_DIR}/Cargo.toml" ]]; then
+    pkgs+=(build-essential pkg-config libssl-dev)
+  fi
+
+  if [[ ${#pkgs[@]} -gt 0 ]]; then
+    local unique_pkgs
+    unique_pkgs=$(printf '%s\n' "${pkgs[@]}" | awk 'NF && !seen[$0]++')
+    log "Installing repo-required system packages"
+    apt-get install -y ${unique_pkgs}
+  else
+    log "No additional repo-required system packages detected"
+  fi
+}
+
+install_repo_systemd_unit() {
+  local default_unit_path="${SRC_DIR}/deploy/systemd/${APP_NAME}.service"
+  local fallback_unit_path="${SRC_DIR}/deploy/systemd/content-orchestrator.service"
+  local selected_unit=""
+
+  if [[ -f "$default_unit_path" ]]; then
+    selected_unit="$default_unit_path"
+  elif [[ -f "$fallback_unit_path" ]]; then
+    selected_unit="$fallback_unit_path"
+  fi
+
+  if [[ -z "$selected_unit" ]]; then
+    warn "No repo-provided systemd service file found; skipping unit installation"
+    return 0
+  fi
+
+  log "Installing systemd unit from ${selected_unit}"
+  sed \
+    -e "s|/home/content/orchestrator|${SRC_DIR}|g" \
+    -e "s|/opt/content-orchestrator/repo|${SRC_DIR}|g" \
+    -e "s|User=content|User=${APP_USER}|g" \
+    -e "s|Group=content|Group=${APP_GROUP}|g" \
+    "$selected_unit" > "/etc/systemd/system/${APP_NAME}.service"
+
+  systemctl daemon-reload
+  systemctl enable "${APP_NAME}.service"
+  systemctl restart "${APP_NAME}.service"
+  systemctl --no-pager --full status "${APP_NAME}.service" || true
+}
 
 need_root
 collect_config
-
 export DEBIAN_FRONTEND=noninteractive
-
-log "Installing base packages"
-apt-get update
-apt-get install -y \
-  ca-certificates \
-  curl \
-  git \
-  openssh-client \
-  jq \
-  unzip \
-  zip \
-  rsync \
-  build-essential \
-  software-properties-common \
-  apt-transport-https \
-  gnupg \
-  lsb-release \
-  python3 \
-  python3-pip \
-  python3-venv \
-  python3-dev \
-  pipx
-
-if ! command_exists node; then
-  log "Installing Node.js 22"
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y nodejs
-fi
+install_minimal_base
 
 if ! id -u "${APP_USER}" >/dev/null 2>&1; then
   log "Creating user ${APP_USER}"
@@ -222,11 +245,7 @@ log "Preparing SSH deploy key"
 install -d -m 700 -o "${APP_USER}" -g "${APP_GROUP}" "/home/${APP_USER}/.ssh"
 
 if [[ ! -f "${SSH_KEY_PATH}" ]]; then
-  sudo -u "${APP_USER}" ssh-keygen \
-    -t ed25519 \
-    -C "${APP_NAME}-deploy@$(hostname)" \
-    -N "" \
-    -f "${SSH_KEY_PATH}"
+  sudo -u "${APP_USER}" ssh-keygen -t ed25519 -C "${APP_NAME}-deploy@$(hostname)" -N "" -f "${SSH_KEY_PATH}"
 else
   warn "SSH key already exists: ${SSH_KEY_PATH}"
 fi
@@ -240,7 +259,7 @@ sudo -u "${APP_USER}" ssh-keyscan -H github.com >> "${KNOWN_HOSTS_PATH}" 2>/dev/
 
 PUBKEY="$(cat "${SSH_KEY_PATH}.pub")"
 
-cat <<EOF
+cat <<EOM
 
 ============================================================
 DEPLOY PUBLIC KEY (add this to your Git repo as deploy key)
@@ -260,7 +279,7 @@ After adding the key, press Enter to continue.
 If clone fails, fix the deploy key on GitHub and run this again.
 ============================================================
 
-EOF
+EOM
 
 read -r -p "Press Enter after the deploy key has been added to the repository..." _
 
@@ -286,7 +305,7 @@ for attempt in 1 2; do
   fi
 done
 
-cat > "${APP_DIR}/deploy.env" <<EOF
+cat > "${APP_DIR}/deploy.env" <<EOM
 APP_NAME="${APP_NAME}"
 APP_USER="${APP_USER}"
 APP_GROUP="${APP_GROUP}"
@@ -299,24 +318,18 @@ STATE_DIR="${STATE_DIR}"
 SSH_KEY_PATH="${SSH_KEY_PATH}"
 KNOWN_HOSTS_PATH="${KNOWN_HOSTS_PATH}"
 REPO_DEPLOY_HOOK="${REPO_DEPLOY_HOOK}"
-EOF
+EOM
 
 chown "${APP_USER}:${APP_GROUP}" "${APP_DIR}/deploy.env"
 chmod 600 "${APP_DIR}/deploy.env"
 
-log "Writing deploy runner"
-
-cat > "${BIN_DIR}/deploy-update.sh" <<'EOF'
+cat > "${BIN_DIR}/deploy-update.sh" <<'EOM'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 source /opt/myapp/deploy.env
-
 export HOME="/home/${APP_USER}"
 export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}"
-
 mkdir -p "${APP_DIR}" "${STATE_DIR}"
-
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
   echo "[+] Cloning repository"
   git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}"
@@ -326,113 +339,90 @@ else
   git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"
   git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"
 fi
+EOM
+sed -i "s|/opt/myapp|${APP_DIR}|g" "${BIN_DIR}/deploy-update.sh"
+chmod +x "${BIN_DIR}/deploy-update.sh"
+chown "${APP_USER}:${APP_GROUP}" "${BIN_DIR}/deploy-update.sh"
 
+log "Cloning/updating repository first"
+sudo -u "${APP_USER}" bash "${BIN_DIR}/deploy-update.sh"
+
+install_repo_system_packages
+
+if [[ -f "${SRC_DIR}/backend/requirements.txt" || -f "${SRC_DIR}/requirements.txt" || -f "${SRC_DIR}/pyproject.toml" ]]; then
+  ensure_python
+fi
+
+log "Writing full deploy runner"
+cat > "${BIN_DIR}/deploy-update.sh" <<'EOM'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source /opt/myapp/deploy.env
+export HOME="/home/${APP_USER}"
+export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}"
+mkdir -p "${APP_DIR}" "${STATE_DIR}"
+if [[ ! -d "${SRC_DIR}/.git" ]]; then
+  echo "[+] Cloning repository"
+  git clone --branch "${REPO_BRANCH}" "${REPO_SSH_URL}" "${SRC_DIR}"
+else
+  echo "[+] Updating repository"
+  git -C "${SRC_DIR}" fetch origin
+  git -C "${SRC_DIR}" checkout "${REPO_BRANCH}"
+  git -C "${SRC_DIR}" reset --hard "origin/${REPO_BRANCH}"
+fi
 cd "${SRC_DIR}"
-
-echo "[+] Detecting dependency managers"
-
 if [[ -f "requirements.txt" ]]; then
-  echo "[+] Installing Python deps from requirements.txt"
   python3 -m venv "${APP_DIR}/venv"
   source "${APP_DIR}/venv/bin/activate"
   python -m pip install --upgrade pip setuptools wheel
   pip install -r requirements.txt
 fi
-
+if [[ -f "backend/requirements.txt" ]]; then
+  python3 -m venv "${SRC_DIR}/backend/.venv"
+  source "${SRC_DIR}/backend/.venv/bin/activate"
+  python -m pip install --upgrade pip setuptools wheel
+  pip install -r backend/requirements.txt
+fi
 if [[ -f "pyproject.toml" ]]; then
-  echo "[+] Found pyproject.toml"
   python3 -m venv "${APP_DIR}/venv"
   source "${APP_DIR}/venv/bin/activate"
   python -m pip install --upgrade pip setuptools wheel
-  if grep -qi "poetry" pyproject.toml; then
-    python -m pip install --upgrade poetry
-    poetry config virtualenvs.create false
-    poetry install --no-interaction
-  else
-    pip install .
-  fi
+  pip install .
 fi
-
 if [[ -f "package-lock.json" ]]; then
-  echo "[+] Installing Node deps with npm ci"
-  npm install -g npm@latest
   npm ci
 elif [[ -f "package.json" ]]; then
-  echo "[+] Installing Node deps with npm install"
-  npm install -g npm@latest
   npm install
 fi
-
 if [[ -f "pnpm-lock.yaml" ]]; then
-  echo "[+] Installing pnpm and dependencies"
   npm install -g pnpm
   pnpm install --frozen-lockfile || pnpm install
 fi
-
 if [[ -f "yarn.lock" ]]; then
-  echo "[+] Installing yarn dependencies"
   npm install -g yarn
   yarn install --frozen-lockfile || yarn install
 fi
-
-if [[ -f "Cargo.toml" ]]; then
-  echo "[+] Rust project detected"
-  if ! command -v cargo >/dev/null 2>&1; then
-    curl https://sh.rustup.rs -sSf | sh -s -- -y
-    source "${HOME}/.cargo/env"
-  fi
-  cargo build --release || true
-fi
-
-if [[ -f "go.mod" ]]; then
-  echo "[+] Go project detected"
-  if ! command -v go >/dev/null 2>&1; then
-    sudo apt-get update && sudo apt-get install -y golang-go
-  fi
-  go mod download
-  go build ./... || true
-fi
-
-if [[ -f "Makefile" ]]; then
-  echo "[+] Running make if useful"
-  make || true
-fi
-
 if [[ -x "./${REPO_DEPLOY_HOOK}" ]]; then
-  echo "[+] Running repo deploy hook: ${REPO_DEPLOY_HOOK}"
   "./${REPO_DEPLOY_HOOK}"
 elif [[ -f "./${REPO_DEPLOY_HOOK}" ]]; then
-  echo "[+] deploy hook exists but is not executable, running with bash"
   bash "./${REPO_DEPLOY_HOOK}"
 else
-  echo "[i] No deploy hook found, dependency sync complete"
+  echo "[i] No deploy hook found"
 fi
-
-echo "[+] Deployment update completed"
-EOF
-
+EOM
 sed -i "s|/opt/myapp|${APP_DIR}|g" "${BIN_DIR}/deploy-update.sh"
 chmod +x "${BIN_DIR}/deploy-update.sh"
 chown "${APP_USER}:${APP_GROUP}" "${BIN_DIR}/deploy-update.sh"
 
-log "Attempting initial deploy/update"
-set +e
-sudo -u "${APP_USER}" bash "${BIN_DIR}/deploy-update.sh"
-DEPLOY_RC=$?
-set -e
-
-if [[ "${DEPLOY_RC}" -ne 0 ]]; then
-  warn "Initial clone/update failed."
-  warn "Most likely the deploy key is not added to the repository yet."
-  warn "After adding the key, run:"
-  echo "sudo -u ${APP_USER} bash ${BIN_DIR}/deploy-update.sh"
-else
+log "Running full deploy"
+if sudo -u "${APP_USER}" bash "${BIN_DIR}/deploy-update.sh"; then
   install_repo_systemd_unit
+else
+  fail "Full deploy failed"
 fi
 
-log "Writing systemd units"
-
-cat > "/etc/systemd/system/${APP_NAME}-autodeploy.service" <<EOF
+log "Writing autodeploy systemd units"
+cat > "/etc/systemd/system/${APP_NAME}-autodeploy.service" <<EOM
 [Unit]
 Description=${APP_NAME} autodeploy runner
 After=network-online.target
@@ -446,29 +436,8 @@ WorkingDirectory=${SRC_DIR}
 Environment=HOME=/home/${APP_USER}
 ExecStart=${BIN_DIR}/deploy-update.sh
 Nice=10
-EOF
-
-cat > "/etc/systemd/system/${APP_NAME}-autodeploy.path" <<EOF
-[Unit]
-Description=Watch ${SRC_DIR} for autodeploy trigger
-
-[Path]
-PathChanged=${SRC_DIR}/.git/FETCH_HEAD
-PathChanged=${SRC_DIR}/package.json
-PathChanged=${SRC_DIR}/requirements.txt
-PathChanged=${SRC_DIR}/pyproject.toml
-Unit=${APP_NAME}-autodeploy.service
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable --now "${APP_NAME}-autodeploy.path"
-
-log "Writing periodic git pull timer"
-
-cat > "/etc/systemd/system/${APP_NAME}-git-pull.service" <<EOF
+EOM
+cat > "/etc/systemd/system/${APP_NAME}-git-pull.service" <<EOM
 [Unit]
 Description=Periodic git pull for ${APP_NAME}
 After=network-online.target
@@ -481,9 +450,8 @@ Group=${APP_GROUP}
 WorkingDirectory=${SRC_DIR}
 Environment=HOME=/home/${APP_USER}
 ExecStart=/bin/bash -lc 'source ${APP_DIR}/deploy.env && export GIT_SSH_COMMAND="ssh -i ${SSH_KEY_PATH} -o IdentitiesOnly=yes -o UserKnownHostsFile=${KNOWN_HOSTS_PATH}" && if [ -d "${SRC_DIR}/.git" ]; then git -C "${SRC_DIR}" fetch origin; fi'
-EOF
-
-cat > "/etc/systemd/system/${APP_NAME}-git-pull.timer" <<EOF
+EOM
+cat > "/etc/systemd/system/${APP_NAME}-git-pull.timer" <<EOM
 [Unit]
 Description=Run periodic git fetch for ${APP_NAME}
 
@@ -494,46 +462,23 @@ Unit=${APP_NAME}-git-pull.service
 
 [Install]
 WantedBy=timers.target
-EOF
+EOM
+cat > "/etc/systemd/system/${APP_NAME}-autodeploy.path" <<EOM
+[Unit]
+Description=Watch ${SRC_DIR} for autodeploy trigger
 
+[Path]
+PathChanged=${SRC_DIR}/.git/FETCH_HEAD
+PathChanged=${SRC_DIR}/package.json
+PathChanged=${SRC_DIR}/requirements.txt
+PathChanged=${SRC_DIR}/backend/requirements.txt
+PathChanged=${SRC_DIR}/pyproject.toml
+Unit=${APP_NAME}-autodeploy.service
+
+[Install]
+WantedBy=multi-user.target
+EOM
 systemctl daemon-reload
+systemctl enable --now "${APP_NAME}-autodeploy.path"
 systemctl enable --now "${APP_NAME}-git-pull.timer"
-
-cat <<EOF
-
-============================================================
-DONE
-============================================================
-
-App name:        ${APP_NAME}
-App user:        ${APP_USER}
-Repo dir:        ${SRC_DIR}
-Deploy key:      ${SSH_KEY_PATH}
-Public key:      ${SSH_KEY_PATH}.pub
-
-Useful commands:
-- Show public key:
-  cat ${SSH_KEY_PATH}.pub
-
-- Run deploy manually:
-  sudo -u ${APP_USER} bash ${BIN_DIR}/deploy-update.sh
-
-- Check autodeploy path:
-  systemctl status ${APP_NAME}-autodeploy.path
-
-- Check periodic fetch timer:
-  systemctl status ${APP_NAME}-git-pull.timer
-
-- Check logs:
-  journalctl -u ${APP_NAME}-autodeploy.service -n 200 --no-pager
-  journalctl -u ${APP_NAME}-git-pull.service -n 200 --no-pager
-
-What you still need:
-1. Add the printed public key to the Git repository deploy keys
-2. Re-run manual deploy if initial clone failed
-3. If your repo needs app-specific start/restart logic, put it in:
-   ${REPO_DEPLOY_HOOK}
-
-============================================================
-
-EOF
+log "Bootstrap completed"
