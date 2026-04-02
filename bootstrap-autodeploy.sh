@@ -300,8 +300,7 @@ install_repo_systemd_unit() {
   fi
 
   if [[ -z "$selected_unit" ]]; then
-    warn "No repo-provided systemd service file found; skipping unit installation"
-    return 0
+    fail "No repo-provided systemd service file found under deploy/systemd/; autostart requires a service template"
   fi
 
   log "Installing systemd unit from ${selected_unit}"
@@ -515,6 +514,14 @@ printf "
 %b[+] Deployed repo commit:%b %s
 
 " "$C_GREEN" "$C_RESET" "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ -d "${SRC_DIR}/deploy/systemd" ]]; then
+  printf "%b[+] Found repo systemd templates:%b %s
+
+" "$C_GREEN" "$C_RESET" "$(find "${SRC_DIR}/deploy/systemd" -maxdepth 1 -type f 2>/dev/null | sed 's#^.*/##' | tr '
+' ' ' | sed 's/ *$//')"
+else
+  warn "Repo systemd templates directory not found"
+fi
 printf "
 %b[+] Deployed repo commit:%b %s
 
