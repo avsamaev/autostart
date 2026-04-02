@@ -514,8 +514,6 @@ else
   log "No deploy hook found"
 fi
 EOM
-EOM
-sed -i "s|/opt/myapp|${APP_DIR}|g" "${BIN_DIR}/deploy-update.sh"
 chmod +x "${BIN_DIR}/deploy-update.sh"
 chown "${APP_USER}:${APP_GROUP}" "${BIN_DIR}/deploy-update.sh"
 
