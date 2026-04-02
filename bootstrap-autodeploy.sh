@@ -2,15 +2,15 @@
 set -Eeuo pipefail
 
 ############################
-# Config — edit these first
+# Config — defaults / env overrides
 ############################
 
-APP_NAME="myapp"
-APP_USER="deploy"
-APP_GROUP="deploy"
+APP_NAME="${APP_NAME:-myapp}"
+APP_USER="${APP_USER:-deploy}"
+APP_GROUP="${APP_GROUP:-deploy}"
 
-REPO_SSH_URL="git@github.com:YOUR_USER/YOUR_REPO.git"
-REPO_BRANCH="main"
+REPO_SSH_URL="${REPO_SSH_URL:-}"
+REPO_BRANCH="${REPO_BRANCH:-main}"
 
 APP_DIR="/opt/${APP_NAME}"
 SRC_DIR="${APP_DIR}/repo"
@@ -22,7 +22,7 @@ KNOWN_HOSTS_PATH="/home/${APP_USER}/.ssh/known_hosts"
 
 # Optional custom deploy hook inside repo
 # If present and executable, script will run it after dependency install.
-REPO_DEPLOY_HOOK="deploy.sh"
+REPO_DEPLOY_HOOK="${REPO_DEPLOY_HOOK:-deploy.sh}"
 
 ############################
 # Helpers
@@ -51,11 +51,56 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+prompt_if_empty() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local current_value="${!var_name:-}"
+  if [[ -z "$current_value" ]]; then
+    read -r -p "$prompt_text" current_value
+    printf -v "$var_name" '%s' "$current_value"
+  fi
+}
+
+recompute_paths() {
+  APP_DIR="/opt/${APP_NAME}"
+  SRC_DIR="${APP_DIR}/repo"
+  BIN_DIR="${APP_DIR}/bin"
+  STATE_DIR="/var/lib/${APP_NAME}"
+  SSH_KEY_PATH="/home/${APP_USER}/.ssh/${APP_NAME}_deploy_key"
+  KNOWN_HOSTS_PATH="/home/${APP_USER}/.ssh/known_hosts"
+}
+
+collect_config() {
+  echo
+  echo "=== Autodeploy bootstrap configuration ==="
+  prompt_if_empty APP_NAME "App name [myapp]: "
+  [[ -z "$APP_NAME" ]] && APP_NAME="myapp"
+  prompt_if_empty APP_USER "Deploy user [deploy]: "
+  [[ -z "$APP_USER" ]] && APP_USER="deploy"
+  APP_GROUP="$APP_USER"
+  prompt_if_empty REPO_SSH_URL "Git SSH URL (example git@github.com:user/repo.git): "
+  prompt_if_empty REPO_BRANCH "Git branch [main]: "
+  [[ -z "$REPO_BRANCH" ]] && REPO_BRANCH="main"
+  prompt_if_empty REPO_DEPLOY_HOOK "Deploy hook inside repo [deploy.sh]: "
+  [[ -z "$REPO_DEPLOY_HOOK" ]] && REPO_DEPLOY_HOOK="deploy.sh"
+  recompute_paths
+
+  echo
+  echo "Configuration summary:"
+  echo "  APP_NAME        = $APP_NAME"
+  echo "  APP_USER        = $APP_USER"
+  echo "  REPO_SSH_URL    = $REPO_SSH_URL"
+  echo "  REPO_BRANCH     = $REPO_BRANCH"
+  echo "  REPO_DEPLOY_HOOK= $REPO_DEPLOY_HOOK"
+  echo
+}
+
 ############################
 # Core setup
 ############################
 
 need_root
+collect_config
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -130,10 +175,16 @@ Repo -> Settings -> Deploy keys -> Add deploy key
 - Allow read access is enough for pull-only autodeploy
 - Allow write only if you know you need it
 
-After adding the key, re-run this script if clone fails.
+Repository configured for autodeploy:
+${REPO_SSH_URL}
+
+After adding the key, press Enter to continue.
+If clone fails, fix the deploy key on GitHub and run this again.
 ============================================================
 
 EOF
+
+read -r -p "Press Enter after the deploy key has been added to the repository..." _
 
 cat > "${APP_DIR}/deploy.env" <<EOF
 APP_NAME="${APP_NAME}"

@@ -38,17 +38,7 @@ The script detects and installs dependencies for common project types:
 
 ## Usage
 
-### 1. Edit the config block at the top of the script
-
-Set at least these values:
-
-```bash
-APP_NAME="myapp"
-REPO_SSH_URL="git@github.com:YOUR_USER/YOUR_REPO.git"
-REPO_BRANCH="main"
-```
-
-### 2. Download and run on a clean Ubuntu 24 server
+### 1. Download and run on a clean Ubuntu 24 server
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/avsamaev/autostart/main/bootstrap-autodeploy.sh -o bootstrap-autodeploy.sh
@@ -56,7 +46,17 @@ chmod +x bootstrap-autodeploy.sh
 sudo ./bootstrap-autodeploy.sh
 ```
 
-### 3. Add the generated public key to your Git repository
+The script now asks interactively for:
+
+- app name
+- deploy user
+- Git SSH repository URL
+- branch
+- deploy hook filename
+
+It then prints the generated deploy public key and pauses so you can add it to the repository before clone starts.
+
+### 2. Add the generated public key to your Git repository
 
 GitHub path:
 
@@ -67,7 +67,7 @@ GitHub path:
 
 Read-only access is enough for pull-only deployment.
 
-### 4. Re-run deploy after adding the key if the first clone failed
+### 3. Re-run deploy after adding the key if the first clone failed
 
 ```bash
 sudo -u deploy bash /opt/myapp/bin/deploy-update.sh
