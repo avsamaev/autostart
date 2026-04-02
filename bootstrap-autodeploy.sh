@@ -198,6 +198,19 @@ install_repo_system_packages() {
   fi
 }
 
+ensure_working_venv() {
+  local venv_path="$1"
+  if [[ -d "$venv_path" ]]; then
+    if [[ ! -x "$venv_path/bin/python" ]] || [[ ! -f "$venv_path/bin/pip" ]]; then
+      warn "Broken virtualenv detected at ${venv_path}; recreating it"
+      rm -rf "$venv_path"
+    fi
+  fi
+  if [[ ! -d "$venv_path" ]]; then
+    python3 -m venv "$venv_path"
+  fi
+}
+
 install_repo_systemd_unit() {
   local default_unit_path="${SRC_DIR}/deploy/systemd/${APP_NAME}.service"
   local fallback_unit_path="${SRC_DIR}/deploy/systemd/content-orchestrator.service"
@@ -393,22 +406,19 @@ else
 fi
 cd "${SRC_DIR}"
 if [[ -f "requirements.txt" ]]; then
-  python3 -m venv "${APP_DIR}/venv"
-  source "${APP_DIR}/venv/bin/activate"
-  python -m pip install --upgrade pip setuptools wheel
-  pip install -r requirements.txt
+  ensure_working_venv "${APP_DIR}/venv"
+  "${APP_DIR}/venv/bin/python" -m pip install --upgrade pip setuptools wheel
+  "${APP_DIR}/venv/bin/python" -m pip install -r requirements.txt
 fi
 if [[ -f "backend/requirements.txt" ]]; then
-  python3 -m venv "${SRC_DIR}/backend/.venv"
-  source "${SRC_DIR}/backend/.venv/bin/activate"
-  python -m pip install --upgrade pip setuptools wheel
-  pip install -r backend/requirements.txt
+  ensure_working_venv "${SRC_DIR}/backend/.venv"
+  "${SRC_DIR}/backend/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
+  "${SRC_DIR}/backend/.venv/bin/python" -m pip install -r backend/requirements.txt
 fi
 if [[ -f "pyproject.toml" ]]; then
-  python3 -m venv "${APP_DIR}/venv"
-  source "${APP_DIR}/venv/bin/activate"
-  python -m pip install --upgrade pip setuptools wheel
-  pip install .
+  ensure_working_venv "${APP_DIR}/venv"
+  "${APP_DIR}/venv/bin/python" -m pip install --upgrade pip setuptools wheel
+  "${APP_DIR}/venv/bin/python" -m pip install .
 fi
 if [[ -f "package-lock.json" ]]; then
   npm ci
